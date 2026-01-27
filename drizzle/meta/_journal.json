@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1769245829364,
+      "tag": "0000_green_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1769246749601,
+      "tag": "0001_previous_patch",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1769250005794,
+      "tag": "0002_natural_scourge",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1769290618689,
+      "tag": "0003_steep_lester",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1769291134026,
+      "tag": "0004_polite_golden_guardian",
+      "breakpoints": true
+    }
+  ]
+}
