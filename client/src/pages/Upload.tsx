@@ -128,46 +128,52 @@ export default function UploadPage() {
       setAnalysisProgress(20);
       let analysisResult;
 
-      // For large files (video/audio), use direct S3 upload
-      if (fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024)) {
-        setAnalysisProgress(30);
-        const { url: uploadUrl } = await getPresignedUrlMutation.mutateAsync({
+    if (fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024)) {
+      setAnalysisProgress(30);
+
+      const { url, fields } = await getPresignedUrlMutation.mutateAsync({
+        fileName: selectedFile.name,
+        fileType: selectedFile.type,
+      });
+
+      setAnalysisProgress(45);
+
+      const form = new FormData();
+      Object.entries(fields).forEach(([k, v]) => {
+        form.append(k, String(v));
+      });
+      
+      form.append("file", selectedFile);
+
+      const uploadResponse = await fetch(url, {
+        method: "POST",
+        body: form,
+      });
+
+      if (!uploadResponse.ok) {
+        const text = await uploadResponse.text().catch(() => "");
+        throw new Error(`Upload failed: ${uploadResponse.status} ${text}`);
+      }
+
+      const fileUrl = `${url}/${fields.key}`;
+
+      setAnalysisProgress(60);
+
+      if (fileType === "video") {
+        analysisResult = await analyzeVideoMutation.mutateAsync({
           fileName: selectedFile.name,
-          fileType: selectedFile.type,
+          fileUrl,
+          mimeType: selectedFile.type,
         });
-
-        setAnalysisProgress(40);
-        const uploadResponse = await fetch(uploadUrl, {
-          method: "PUT",
-          body: selectedFile,
-          headers: {
-            "Content-Type": selectedFile.type,
-          },
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error("Failed to upload file to storage");
-        }
-
-        // Get the final URL (remove query params from presigned URL)
-        const fileUrl = uploadUrl.split("?")[0];
-        setAnalysisProgress(60);
-
-        if (fileType === "video") {
-          analysisResult = await analyzeVideoMutation.mutateAsync({
-            fileName: selectedFile.name,
-            fileUrl,
-            mimeType: selectedFile.type,
-          });
-        } else {
-          analysisResult = await analyzeAudioMutation.mutateAsync({
-            fileName: selectedFile.name,
-            fileUrl,
-            mimeType: selectedFile.type,
-            audioType,
-          });
-        }
       } else {
+        analysisResult = await analyzeAudioMutation.mutateAsync({
+          fileName: selectedFile.name,
+          fileUrl,
+          mimeType: selectedFile.type,
+          audioType,
+        });
+      }
+    } else {
         // For small files, use base64 (existing logic)
         const reader = new FileReader();
         const fileDataPromise = new Promise<string>((resolve, reject) => {
