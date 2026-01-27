@@ -128,7 +128,8 @@ export const detectionRouter = router({
         );
 
         // Save result to database
-        const result = await createDetectionResult(ctx.user.id, {
+        await createDetectionResult({
+          userId: ctx.user.id,
           fileName: input.fileName,
           fileType: "image",
           fileSize: fileBuffer.length,
@@ -165,7 +166,7 @@ export const detectionRouter = router({
         
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to analyze image. Please try again.",
+          message: error.message || "Failed to analyze image. Please try again.",
         });
       }
     }),
@@ -252,7 +253,8 @@ export const detectionRouter = router({
           input.mimeType
         );
 
-        await createDetectionResult(ctx.user.id, {
+        await createDetectionResult({
+          userId: ctx.user.id,
           fileName: input.fileName,
           fileType: "audio",
           fileSize: fileBuffer.length,
@@ -288,7 +290,7 @@ export const detectionRouter = router({
 
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to analyze audio. Please try again.",
+          message: error.message || "Failed to analyze audio. Please try again.",
         });
       }
     }),
@@ -333,13 +335,9 @@ export const detectionRouter = router({
       }
 
       try {
-        // Calculate file hash for duplicate detection
         const fileHash = calculateFileHash(fileBuffer);
-
-        // Check for duplicate analysis
         const duplicate = await findDuplicateAnalysis(ctx.user.id, fileHash);
         if (duplicate) {
-          console.log(`[Detection] Found cached result for video hash ${fileHash}`);
           const fileUrl = duplicate.s3Key ? (await storageGet(duplicate.s3Key)).url : "";
           return {
             success: true,
@@ -355,21 +353,18 @@ export const detectionRouter = router({
         const apiResponse = await detectVideoAI(fileBuffer, input.fileName);
         const processingTime = Date.now() - startTime;
 
-        // Video API returns ai_video, ai_voice, ai_music - use ai_video as primary verdict
-        const aiVideo = apiResponse.report.ai_video;
-        const verdict: "ai" | "human" = aiVideo.is_detected ? "ai" : "human";
-        const confidencePercent = Math.round(aiVideo.confidence * 100);
-        const confidence = (confidencePercent / 100).toFixed(4);
-        const detectedGenerator: string | null = null; // Video API doesn't return generator info
-
-        const s3Key = `detections/${ctx.user.id}/videos/${Date.now()}-${input.fileName}`;
+        const verdict = apiResponse.report.ai_video.is_detected ? "ai" : "human";
+        const confidence = apiResponse.report.ai_video.confidence.toFixed(4);
+        
+        const s3Key = `detections/${ctx.user.id}/video/${Date.now()}-${input.fileName}`;
         const { url: fileUrl } = await storagePut(
           s3Key,
           fileBuffer,
           input.mimeType
         );
 
-        await createDetectionResult(ctx.user.id, {
+        await createDetectionResult({
+          userId: ctx.user.id,
           fileName: input.fileName,
           fileType: "video",
           fileSize: fileBuffer.length,
@@ -377,7 +372,7 @@ export const detectionRouter = router({
           s3Key,
           verdict,
           confidence: confidence,
-          detectedGenerator,
+          detectedGenerator: null,
           generatorScores: {},
           rawResponse: apiResponse.report,
           processingTimeMs: processingTime,
@@ -388,24 +383,16 @@ export const detectionRouter = router({
           success: true,
           verdict,
           confidence: confidence.toString(),
-          detectedGenerator,
+          detectedGenerator: null,
           fileUrl,
           processingTimeMs: processingTime,
           isCached: false,
         };
       } catch (error: any) {
         console.error("[Detection] Video analysis failed:", error);
-
-        if (error?.message?.includes("402") || error?.message?.includes("Paid plan")) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Video detection is not available with the current API plan. Please upgrade your account.",
-          });
-        }
-
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to analyze video. Please try again.",
+          message: error.message || "Failed to analyze video. Please try again.",
         });
       }
     }),
@@ -414,50 +401,26 @@ export const detectionRouter = router({
    * Analyze text for AI-generated content
    */
   analyzeText: protectedProcedure
-    .input(
-      z.object({
-        text: z.string().min(1).max(MAX_TEXT_LENGTH),
-      })
-    )
+    .input(z.object({ text: z.string().min(1).max(MAX_TEXT_LENGTH) }))
     .mutation(async ({ ctx, input }) => {
       const startTime = Date.now();
 
       try {
-        // Calculate text hash for duplicate detection
-        const textHash = calculateFileHash(Buffer.from(input.text, "utf-8"));
-
-        // Check for duplicate analysis
-        const duplicate = await findDuplicateAnalysis(ctx.user.id, textHash);
-        if (duplicate) {
-          console.log(`[Detection] Found cached result for text hash ${textHash}`);
-          return {
-            success: true,
-            verdict: duplicate.verdict as "ai" | "human",
-            confidence: duplicate.confidence.toString(),
-            detectedGenerator: duplicate.detectedGenerator,
-            fileUrl: "",
-            processingTimeMs: 0,
-            isCached: true,
-          };
-        }
-
         const apiResponse = await detectTextAI(input.text);
         const processingTime = Date.now() - startTime;
 
         const aiGenerated = apiResponse.report.ai_generated;
         const verdict = aiGenerated.verdict;
-        const confidencePercent = Math.round(parseFloat(aiGenerated.ai.confidence.toString()) * 100);
-        const confidence = (confidencePercent / 100).toFixed(4);
-        const detectedGenerator = getTopDetectedGenerator(
-          aiGenerated.generator
-        );
+        const confidence = aiGenerated.ai.confidence.toFixed(4);
+        const detectedGenerator = getTopDetectedGenerator(aiGenerated.generator);
 
-        await createDetectionResult(ctx.user.id, {
-          fileName: "text-input",
+        await createDetectionResult({
+          userId: ctx.user.id,
+          fileName: "text_input",
           fileType: "text",
-          fileSize: input.text.length,
-          fileHash: textHash,
-          s3Key: "",
+          fileSize: Buffer.byteLength(input.text),
+          fileHash: createHash("sha256").update(input.text).digest("hex"),
+          s3Key: null,
           verdict,
           confidence: confidence,
           detectedGenerator,
@@ -474,28 +437,27 @@ export const detectionRouter = router({
           detectedGenerator,
           fileUrl: "",
           processingTimeMs: processingTime,
-          isCached: false,
         };
       } catch (error: any) {
         console.error("[Detection] Text analysis failed:", error);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to analyze text. Please try again.",
+          message: error.message || "Failed to analyze text. Please try again.",
         });
       }
     }),
 
   /**
-   * Get analysis history for current user
+   * Get user's detection history
    */
   getHistory: protectedProcedure
     .input(z.object({ limit: z.number().default(50) }))
     .query(async ({ ctx, input }) => {
-      return await getUserDetectionHistory(ctx.user.id, input.limit);
+      return await getUserDetectionHistory(ctx.user.id);
     }),
 
   /**
-   * Get a specific detection result
+   * Get a specific detection result by ID
    */
   getResult: protectedProcedure
     .input(z.object({ id: z.number() }))
@@ -504,7 +466,7 @@ export const detectionRouter = router({
     }),
 
   /**
-   * Get filtered detection history with date range, verdict, and file type filters
+   * Get filtered detection history
    */
   getFilteredHistory: protectedProcedure
     .input(
@@ -530,35 +492,7 @@ export const detectionRouter = router({
     }),
 
   /**
-   * Check for duplicate analysis based on file hash
-   */
-  checkDuplicate: protectedProcedure
-    .input(
-      z.object({
-        fileHash: z.string(),
-      })
-    )
-    .query(async ({ ctx, input }) => {
-      try {
-        const duplicate = await findDuplicateAnalysis(
-          ctx.user.id,
-          input.fileHash
-        );
-        return {
-          isDuplicate: !!duplicate,
-          cachedResult: duplicate || null,
-        };
-      } catch (error) {
-        console.error("[Detection] Duplicate check failed:", error);
-        return {
-          isDuplicate: false,
-          cachedResult: null,
-        };
-      }
-    }),
-
-  /**
-   * Export multiple detection results as CSV
+   * Export detection results
    */
   exportResults: protectedProcedure
     .input(
@@ -572,23 +506,10 @@ export const detectionRouter = router({
         const results = await getDetectionResultsForExport(ctx.user.id, input.ids);
 
         if (input.format === "json") {
-          return {
-            success: true,
-            data: results,
-            format: "json",
-          };
+          return { success: true, data: results, format: "json" };
         }
 
-        // CSV format
-        const headers = [
-          "ID",
-          "File Name",
-          "File Type",
-          "Verdict",
-          "Confidence",
-          "Generator",
-          "Date",
-        ];
+        const headers = ["ID", "File Name", "File Type", "Verdict", "Confidence", "Generator", "Date"];
         const rows = results.map((r) => [
           r.id,
           r.fileName,
@@ -601,28 +522,13 @@ export const detectionRouter = router({
 
         const csvContent = [
           headers.join(","),
-          ...rows.map((row) =>
-            row
-              .map((cell) =>
-                typeof cell === "string" && cell.includes(",")
-                  ? `"${cell}"`
-                  : cell
-              )
-              .join(",")
-          ),
+          ...rows.map((row) => row.map((cell) => typeof cell === "string" && cell.includes(",") ? `"${cell}"` : cell).join(","))
         ].join("\n");
 
-        return {
-          success: true,
-          data: csvContent,
-          format: "csv",
-        };
+        return { success: true, data: csvContent, format: "csv" };
       } catch (error) {
         console.error("[Detection] Export failed:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to export results.",
-        });
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to export results." });
       }
     }),
 
@@ -635,7 +541,11 @@ export const detectionRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Detection result not found" });
         }
         const shareToken = generateShareToken();
-        await createShareLink(ctx.user.id, input.detectionResultId, shareToken);
+        await createShareLink({
+          userId: ctx.user.id,
+          detectionResultId: input.detectionResultId,
+          shareToken,
+        });
         return { success: true, shareToken, shareUrl: `/share/${shareToken}` };
       } catch (error: any) {
         console.error("[Detection] Share link creation failed:", error);
@@ -651,8 +561,7 @@ export const detectionRouter = router({
         if (!shareLink || shareLink.userId !== ctx.user.id) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Share link not found" });
         }
-        const stats = await getShareLinkStats(input.shareToken);
-        return stats || { viewCount: 0, lastViewedAt: null, createdAt: null };
+        return await getShareLinkStats(input.shareToken);
       } catch (error: any) {
         console.error("[Detection] Share stats retrieval failed:", error);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to retrieve share statistics" });

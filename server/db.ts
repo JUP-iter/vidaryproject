@@ -1,4 +1,4 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { 
@@ -58,12 +58,11 @@ export async function getDetectionResult(id: number) {
   return result[0];
 }
 
-export async function getUserDetectionResults(userId: number) {
+export async function getUserDetectionHistory(userId: number) {
   const db = await getDb();
   return await db.select().from(detectionResults).where(eq(detectionResults.userId, userId)).orderBy(desc(detectionResults.createdAt));
 }
 
-// Исправленные функции для Share Links (используем shareToken вместо slug)
 export async function createShareLink(link: InsertShareLink) {
   const db = await getDb();
   await db.insert(shareLinks).values(link);
@@ -77,10 +76,9 @@ export async function getShareLinkBySlug(slug: string) {
   return result[0];
 }
 
-// Добавлена недостающая функция для роутера
 export async function getShareLinkStats(slug: string) {
   const link = await getShareLinkBySlug(slug);
-  return link ? { viewCount: link.viewCount, lastViewedAt: link.lastViewedAt } : null;
+  return link ? { viewCount: link.viewCount, lastViewedAt: link.lastViewedAt, createdAt: link.createdAt } : null;
 }
 
 export async function getDetectionResultByShareSlug(slug: string) {
@@ -89,13 +87,13 @@ export async function getDetectionResultByShareSlug(slug: string) {
   return await getDetectionResult(link.detectionResultId);
 }
 
-export async function getUserDetectionHistory(userId: number) {
+export async function getDetectionResultById(id: number, userId?: number) {
   const db = await getDb();
-  return await db.select().from(detectionResults).where(eq(detectionResults.userId, userId)).orderBy(desc(detectionResults.createdAt));
-}
-
-export async function getDetectionResultById(id: number) {
-  return await getDetectionResult(id);
+  const conditions = [eq(detectionResults.id, id)];
+  if (userId) conditions.push(eq(detectionResults.userId, userId));
+  
+  const result = await db.select().from(detectionResults).where(and(...conditions)).limit(1);
+  return result[0];
 }
 
 export async function findDuplicateAnalysis(userId: number, fileHash: string) {
@@ -104,13 +102,26 @@ export async function findDuplicateAnalysis(userId: number, fileHash: string) {
   return result[0];
 }
 
-export async function getDetectionResultsForExport(userId: number) {
-  return await getUserDetectionHistory(userId);
+export async function getDetectionResultsForExport(userId: number, ids?: number[]) {
+  const db = await getDb();
+  const conditions = [eq(detectionResults.userId, userId)];
+  if (ids && ids.length > 0) {
+    conditions.push(inArray(detectionResults.id, ids));
+  }
+  return await db.select().from(detectionResults).where(and(...conditions)).orderBy(desc(detectionResults.createdAt));
 }
 
-export async function getFilteredDetectionHistory(userId: number, filters: any) {
-  // Simple implementation for now
-  return await getUserDetectionHistory(userId);
+export async function getFilteredDetectionHistory(userId: number, filters: any, limit: number = 50) {
+  const db = await getDb();
+  const conditions = [eq(detectionResults.userId, userId)];
+  
+  if (filters.verdict) conditions.push(eq(detectionResults.verdict, filters.verdict));
+  if (filters.fileType) conditions.push(eq(detectionResults.fileType, filters.fileType));
+  
+  return await db.select().from(detectionResults)
+    .where(and(...conditions))
+    .orderBy(desc(detectionResults.createdAt))
+    .limit(limit);
 }
 
 export async function getShareLink(token: string) {
