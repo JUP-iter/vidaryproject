@@ -131,31 +131,24 @@ export default function UploadPage() {
     if (fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024)) {
       setAnalysisProgress(30);
 
-      const { url, fields } = await getPresignedUrlMutation.mutateAsync({
-        fileName: selectedFile.name,
-        fileType: selectedFile.type,
-      });
+    const presign = await getPresignedUrlMutation.mutateAsync({
+      fileName: selectedFile.name,
+      fileType: selectedFile.type,
+    });
 
-      setAnalysisProgress(45);
+    if (!presign?.fields || !presign?.url || !presign?.fileUrl) {
+      console.log("presign:", presign);
+      throw new Error("Need { url, fields, fileUrl } from server");
+    }
 
-      const form = new FormData();
-      Object.entries(fields).forEach(([k, v]) => {
-        form.append(k, String(v));
-      });
-      
-      form.append("file", selectedFile);
+    const form = new FormData();
+    Object.entries(presign.fields).forEach(([k, v]) => form.append(k, v));
+    form.append("file", selectedFile);
 
-      const uploadResponse = await fetch(url, {
-        method: "POST",
-        body: form,
-      });
+    const resp = await fetch(presign.url, { method: "POST", body: form });
+    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
 
-      if (!uploadResponse.ok) {
-        const text = await uploadResponse.text().catch(() => "");
-        throw new Error(`Upload failed: ${uploadResponse.status} ${text}`);
-      }
-
-      const fileUrl = `${url}/${fields.key}`;
+    const fileUrl = presign.fileUrl;
 
       setAnalysisProgress(60);
 

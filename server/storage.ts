@@ -1,6 +1,6 @@
 // Preconfigured storage helpers for Manus WebDev templates
 // Supports both Biz-provided storage proxy and direct AWS S3
-
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { ENV } from './_core/env.js';
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -139,34 +139,51 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
   throw new Error("Storage configuration missing");
 }
 
-export async function getUploadUrl(relKey: string): Promise<{ key: string; url: string }> {
+export async function getUploadUrl(
+  relKey: string
+): Promise<{ key: string; url: string; fields: Record<string, string>; fileUrl: string }> {
   const { baseUrl, apiKey } = getStorageConfig();
   const key = normalizeKey(relKey);
 
-  // Try Forge Proxy first
   if (baseUrl && apiKey) {
     const uploadApiUrl = new URL("v1/storage/uploadUrl", ensureTrailingSlash(baseUrl));
     uploadApiUrl.searchParams.set("path", key);
+
     const response = await fetch(uploadApiUrl, {
       method: "GET",
       headers: buildAuthHeaders(apiKey),
     });
+
     if (response.ok) {
-      const { url } = await response.json();
-      return { key, url };
+      const json = await response.json();
+      if (json?.url && json?.fields && json?.fileUrl) {
+        return { key, url: json.url, fields: json.fields, fileUrl: json.fileUrl };
+      }
+      throw new Error("Forge proxy must return {url, fields, fileUrl} for POST upload.");
     }
   }
 
-  // Fallback to direct S3 (Presigned URL for upload)
   const client = getS3Client();
-  if (client && ENV.s3.bucket) {
-    const command = new PutObjectCommand({
+  if (client && ENV.s3.bucket && ENV.s3.endpoint) {
+    const maxSize = 120 * 1024 * 1024;
+
+    const { url, fields } = await createPresignedPost(client as any, {
       Bucket: ENV.s3.bucket,
       Key: key,
+      Expires: 3600,
+      Conditions: [
+        ["content-length-range", 1, maxSize],
+      ],
+      Fields: {
+        key, // важно
+      },
     });
-    const url = await getSignedUrl(client as any, command as any, { expiresIn: 3600 });
-    return { key, url };
+
+    const base = ENV.s3.endpoint.replace(/\/+$/, "");
+    const fileUrl = `${base}/${ENV.s3.bucket}/${key}`;
+
+    return { key, url, fields, fileUrl };
   }
 
-  throw new Error("Storage configuration missing: set BUILT_IN_FORGE_API_KEY or S3 credentials");
+  throw new Error("Storage configuration missing: set forge key or S3 credentials");
 }
