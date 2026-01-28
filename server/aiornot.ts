@@ -197,27 +197,36 @@ export async function detectVideoAI(
 ): Promise<AIOrNotVideoResponse> {
   console.log("[AIOrNot] Video API URL:", ENV.aiOrNotApiUrl);
   console.log("[AIOrNot] Video API Key present:", !!ENV.aiOrNotApiKey);
+  console.log("[AIOrNot] Video file size:", fileBuffer.length, "bytes");
 
   const formData = new FormData();
   formData.append("video", new Blob([new Uint8Array(fileBuffer)]), fileName);
   formData.append("external_id", `video-${Date.now()}`);
 
-  const response = await fetch(`${ENV.aiOrNotApiUrl}/video/sync`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${ENV.aiOrNotApiKey}`,
-      Accept: "application/json",
-    },
-    body: formData,
-  });
+  try {
+    const response = await fetch(`${ENV.aiOrNotApiUrl}/video/sync`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ENV.aiOrNotApiKey}`,
+        Accept: "application/json",
+      },
+      body: formData,
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    console.error(`[AIorNot Error] Video API failed: ${response.status} - ${errorText}`);
-    throw new Error(`AI or Not Video API error: ${response.status} - ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[AIorNot Error] Video API failed: ${response.status} - ${errorText}`);
+      throw new Error(`AI or Not Video API error: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log("[AIOrNot] Video API response received successfully");
+    return result;
+  } catch (error: any) {
+    console.error("[AIOrNot] Video API fetch error:", error?.message);
+    console.error("[AIOrNot] Video API error stack:", error?.stack);
+    throw error;
   }
-
-  return response.json();
 }
 
 /**

@@ -356,6 +356,11 @@ export const detectionRouter = router({
         const processingTime = Date.now() - startTime;
 
         // Video API returns ai_video, ai_voice, ai_music - use ai_video as primary verdict
+        if (!apiResponse?.report?.ai_video) {
+          console.error("[Detection] Invalid video API response structure:", JSON.stringify(apiResponse).substring(0, 500));
+          throw new Error("Invalid response from AI detection service");
+        }
+
         const aiVideo = apiResponse.report.ai_video;
         const verdict: "ai" | "human" = aiVideo.is_detected ? "ai" : "human";
         const confidencePercent = Math.round(aiVideo.confidence * 100);
@@ -395,11 +400,21 @@ export const detectionRouter = router({
         };
       } catch (error: any) {
         console.error("[Detection] Video analysis failed:", error);
+        console.error("[Detection] Error stack:", error?.stack);
+        console.error("[Detection] Error message:", error?.message);
 
         if (error?.message?.includes("402") || error?.message?.includes("Paid plan")) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message: "Video detection is not available with the current API plan. Please upgrade your account.",
+          });
+        }
+
+        if (error?.message?.includes("Storage configuration missing")) {
+          console.error("[Detection] Storage not configured properly");
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Server storage not configured. Please contact support.",
           });
         }
 
