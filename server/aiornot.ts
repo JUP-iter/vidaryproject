@@ -283,18 +283,15 @@ export type AIOrNotResponse =
 export async function detectTextAI(
   text: string
 ): Promise<AIOrNotTextResponse> {
-  const response = await fetch(`${ENV.aiOrNotApiUrl}/text/sync`, {
+    const response = await fetch(`${ENV.aiOrNotApiUrl}/text/sync`, {
       method: "POST",
       headers: {
-        "x-api-key": ENV.aiOrNotApiKey,
+        Authorization: `Bearer ${ENV.aiOrNotApiKey}`,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
-      body: JSON.stringify({
-        text: text,
-        external_id: `text-${Date.now()}`,
-      }),
-    }
-  );
+      body: JSON.stringify({ text, external_id: `text-${Date.now()}` }),
+    });
 
   if (!response.ok) {
     const errorText = await response.text();
