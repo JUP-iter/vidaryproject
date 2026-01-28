@@ -3,13 +3,9 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Loader2, UploadCloud, CheckCircle, ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
+import { useLocation } from "wouter";
 import EnhancedResultCard from "@/components/EnhancedResultCard";
-
-
-const toast = {
-  success: (msg: string) => alert(msg),
-  error: (msg: string) => alert(msg),
-};
 
 type FileType = "image" | "audio" | "video";
 type AudioType = "voice" | "music";
@@ -23,7 +19,29 @@ interface AnalysisResult {
   processingTimeMs: number;
 }
 
+async function uploadLargeFileToApi(file: File): Promise<{ fileUrl: string }> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const resp = await fetch("/api/upload", {
+    method: "POST",
+    body: form,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Upload API failed: ${resp.status} ${text}`);
+  }
+
+  const json = await resp.json();
+  if (!json?.fileUrl) {
+    throw new Error("Upload API returned no fileUrl");
+  }
+  return { fileUrl: json.fileUrl };
+}
+
 export default function UploadPage() {
+  const [, navigate] = useLocation();
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileType, setFileType] = useState<FileType | null>(null);
@@ -31,7 +49,6 @@ export default function UploadPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -39,14 +56,11 @@ export default function UploadPage() {
   const analyzeAudioMutation = trpc.detection.analyzeAudio.useMutation();
   const analyzeVideoMutation = trpc.detection.analyzeVideo.useMutation();
 
-  // ✅ НОВОЕ: upload через backend
-  const uploadFileMutation = trpc.storage.uploadFile.useMutation();
-
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
-    else if (e.type === "dragleave") setDragActive(false);
+    if (e.type === "dragleave") setDragActive(false);
   };
 
   const validateFile = (file: File): { valid: boolean; type?: FileType; error?: string } => {
@@ -62,14 +76,17 @@ export default function UploadPage() {
       if (file.size > imageSizeLimit) return { valid: false, error: "Image exceeds 10MB limit" };
       return { valid: true, type: "image" };
     }
+
     if (audioTypes.includes(file.type)) {
       if (file.size > audioSizeLimit) return { valid: false, error: "Audio exceeds 50MB limit" };
       return { valid: true, type: "audio" };
     }
+
     if (videoTypes.includes(file.type)) {
       if (file.size > videoSizeLimit) return { valid: false, error: "Video exceeds 100MB limit" };
       return { valid: true, type: "video" };
     }
+
     return { valid: false, error: "Unsupported file type" };
   };
 
@@ -88,21 +105,12 @@ export default function UploadPage() {
       return;
     }
     setSelectedFile(file);
-    if (validation.type) setFileType(validation.type);
+    setFileType(validation.type || null);
     setResult(null);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) handleFileSelect(e.target.files[0]);
-  };
-
-  const readFileAsBase64 = (file: File) => {
-    const reader = new FileReader();
-    return new Promise<string>((resolve, reject) => {
-      reader.onload = () => resolve((reader.result as string).split(",")[1]); // only base64 part
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
   };
 
   const handleAnalyze = async () => {
@@ -120,48 +128,42 @@ export default function UploadPage() {
 
     try {
       setAnalysisProgress(20);
+      let analysisResult: any;
 
-      let analysisResult: AnalysisResult | undefined;
-
-      // ✅ Большие файлы (video + audio > 4MB) — грузим через backend, потом анализ по URL
-      const isLargeRemote =
+      // 🔥 КЛЮЧЕВОЕ: большие файлы грузим НЕ через tRPC/JSON, а через /api/upload (multipart)
+      const isLarge =
         fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024);
 
-      if (isLargeRemote) {
+      if (isLarge) {
         setAnalysisProgress(35);
 
-        const fileData = await readFileAsBase64(selectedFile); // ⚠️ может быть тяжело для 100MB
-        setAnalysisProgress(55);
+        const { fileUrl } = await uploadLargeFileToApi(selectedFile);
 
-        const uploaded = await uploadFileMutation.mutateAsync({
-          fileName: selectedFile.name,
-          mimeType: selectedFile.type,
-          fileData,
-        });
-
-        if (!uploaded?.fileUrl) {
-          throw new Error("Upload failed: server returned no fileUrl");
-        }
-
-        setAnalysisProgress(70);
+        setAnalysisProgress(65);
 
         if (fileType === "video") {
           analysisResult = await analyzeVideoMutation.mutateAsync({
             fileName: selectedFile.name,
-            fileUrl: uploaded.fileUrl,
+            fileUrl,
             mimeType: selectedFile.type,
           });
         } else {
           analysisResult = await analyzeAudioMutation.mutateAsync({
             fileName: selectedFile.name,
-            fileUrl: uploaded.fileUrl,
+            fileUrl,
             mimeType: selectedFile.type,
             audioType,
           });
         }
       } else {
-        // ✅ Маленькие файлы — оставляем старую схему base64 -> analyze
-        const fileData = await readFileAsBase64(selectedFile);
+        // маленькие файлы — оставляем base64 как было
+        const reader = new FileReader();
+        const fileData = await new Promise<string>((resolve, reject) => {
+          reader.onload = (e) => resolve((e.target?.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(selectedFile);
+        });
+
         setAnalysisProgress(45);
 
         if (fileType === "image") {
@@ -210,11 +212,7 @@ export default function UploadPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 py-12 px-4">
         <div className="max-w-4xl mx-auto">
-          <EnhancedResultCard
-            result={result}
-            fileType={fileType || "image"}
-            fileName={selectedFile?.name}
-          />
+          <EnhancedResultCard result={result} fileType={fileType || "image"} fileName={selectedFile?.name} />
           <Button onClick={handleReset} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white">
             Analyze Another File
           </Button>
@@ -225,10 +223,9 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 py-12 px-4">
-      {/* Back Button */}
       <div className="max-w-4xl mx-auto mb-6">
         <Button
-          onClick={() => (window.location.href = "/")}
+          onClick={() => navigate("/")}
           variant="outline"
           className="flex items-center gap-2 border-slate-300 text-slate-700 hover:bg-slate-100"
         >
@@ -238,13 +235,11 @@ export default function UploadPage() {
       </div>
 
       <div className="max-w-2xl mx-auto">
-        {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-900 mb-2">AI Content Detector</h1>
           <p className="text-slate-600">Upload an image, audio, or video file to detect if it's AI-generated</p>
         </div>
 
-        {/* Upload Card */}
         <Card className="border-2 border-slate-200 shadow-lg mb-8">
           <div
             className={`p-12 border-2 border-dashed rounded-lg transition-all duration-200 ${
@@ -288,17 +283,13 @@ export default function UploadPage() {
             </div>
 
             {!selectedFile && (
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white"
-              >
+              <Button onClick={() => fileInputRef.current?.click()} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white">
                 Select File
               </Button>
             )}
           </div>
         </Card>
 
-        {/* Audio Type Selection */}
         {fileType === "audio" && (
           <Card className="border border-slate-200 shadow-md p-6 mb-6">
             <label className="block text-sm font-semibold text-slate-900 mb-3">Audio Type</label>
@@ -329,7 +320,6 @@ export default function UploadPage() {
           </Card>
         )}
 
-        {/* Progress Bar */}
         {isAnalyzing && (
           <Card className="border border-slate-200 shadow-md p-6 mb-6 bg-white">
             <div className="flex items-center justify-between mb-3">
@@ -345,7 +335,6 @@ export default function UploadPage() {
           </Card>
         )}
 
-        {/* Analyze Button */}
         {selectedFile && (
           <Button
             onClick={handleAnalyze}
