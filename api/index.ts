@@ -5,7 +5,6 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 // @ts-ignore
 import cookieParser from "cookie-parser";
 
-import uploadHandler from "./upload.js";
 
 const app = express();
 
@@ -17,9 +16,6 @@ app.options("/api/upload", (_req, res) => {
   return res.status(204).end();
 });
 
-app.post("/api/upload", (req, res) => {
-  return uploadHandler(req as any, res as any);
-});
 
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ limit: "100mb", extended: true }));

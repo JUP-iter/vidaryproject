@@ -197,44 +197,27 @@ export async function detectVideoAI(
 ): Promise<AIOrNotVideoResponse> {
   console.log("[AIOrNot] Video API URL:", ENV.aiOrNotApiUrl);
   console.log("[AIOrNot] Video API Key present:", !!ENV.aiOrNotApiKey);
+
   const formData = new FormData();
   formData.append("video", new Blob([new Uint8Array(fileBuffer)]), fileName);
   formData.append("external_id", `video-${Date.now()}`);
 
-  // Video MUST be async according to docs
-  const asyncResponse = await fetch(`${ENV.aiOrNotApiUrl}/video`, {
+  const response = await fetch(`${ENV.aiOrNotApiUrl}/video/sync`, {
     method: "POST",
-    headers: { 
-      "Authorization": `Bearer ${ENV.aiOrNotApiKey}`,
-      "Accept": "application/json"
+    headers: {
+      Authorization: `Bearer ${ENV.aiOrNotApiKey}`,
+      Accept: "application/json",
     },
     body: formData,
   });
 
-  if (!asyncResponse.ok) {
-    const errorText = await asyncResponse.text();
-    console.error(`[AIorNot Error] Video Async Start failed: ${asyncResponse.status} - ${errorText}`);
-    throw new Error(`AI or Not Video API error: ${asyncResponse.status} - ${errorText}`);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    console.error(`[AIorNot Error] Video API failed: ${response.status} - ${errorText}`);
+    throw new Error(`AI or Not Video API error: ${response.status} - ${errorText}`);
   }
 
-  const { id } = await asyncResponse.json();
-  console.log(`[AIorNot] Video task created: ${id}. Polling...`);
-
-  // Poll for results (up to 30 attempts for video)
-  for (let i = 0; i < 30; i++) {
-    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3s
-    const pollResponse = await fetch(`${ENV.aiOrNotApiUrl}/reports/${id}`, {
-      headers: { "Authorization": `Bearer ${ENV.aiOrNotApiKey}` },
-    });
-    
-    if (pollResponse.ok) {
-      const result = await pollResponse.json();
-      if (result.report && (result.report.ai_video || result.report.ai_generated)) {
-        return result;
-      }
-    }
-  }
-  throw new Error("Video analysis timed out");
+  return response.json();
 }
 
 /**

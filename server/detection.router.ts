@@ -311,7 +311,7 @@ export const detectionRouter = router({
       if (!ALLOWED_VIDEO_TYPES.includes(input.mimeType)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Invalid video type. Allowed: ${ALLOWED_IMAGE_TYPES.join(", ")}`,
+          message: `Invalid video type. Allowed: ${ALLOWED_VIDEO_TYPES.join(", ")}`
         });
       }
 
