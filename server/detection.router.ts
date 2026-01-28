@@ -193,15 +193,42 @@ export const detectionRouter = router({
         });
       }
 
-      let fileBuffer: Buffer;
-      if (input.fileUrl) {
-        const response = await fetch(input.fileUrl);
-        fileBuffer = Buffer.from(await response.arrayBuffer());
-      } else if (input.fileData) {
-        fileBuffer = Buffer.from(input.fileData, "base64");
-      } else {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No file data provided" });
+let fileBuffer: Buffer;
+
+if (input.fileUrl) {
+  const r = await fetch(input.fileUrl, { redirect: "follow" });
+
+  const ct = r.headers.get("content-type") || "";
+  const cl = r.headers.get("content-length") || "";
+
+  console.log("[Fetch fileUrl] status:", r.status, "content-type:", ct, "content-length:", cl);
+
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `fileUrl fetch failed: ${r.status}. Body: ${text.slice(0, 200)}`,
+    });
+  }
+
+  const ab = await r.arrayBuffer();
+  fileBuffer = Buffer.from(ab);
+
+      // sanity-check: если слишком маленький файл — это почти точно HTML/ошибка
+      if (fileBuffer.length < 1024) {
+        const head = fileBuffer.toString("utf8", 0, Math.min(200, fileBuffer.length));
+        console.log("[Fetch fileUrl] too small buffer, head:", head);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Downloaded file too small (${fileBuffer.length} bytes). Probably not a real video.`,
+        });
       }
+    } else if (input.fileData) {
+      fileBuffer = Buffer.from(input.fileData, "base64");
+    } else {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "No file data provided" });
+    }
+
 
       if (fileBuffer.length > MAX_AUDIO_SIZE) {
         throw new TRPCError({
@@ -315,15 +342,42 @@ export const detectionRouter = router({
         });
       }
 
-      let fileBuffer: Buffer;
-      if (input.fileUrl) {
-        const response = await fetch(input.fileUrl);
-        fileBuffer = Buffer.from(await response.arrayBuffer());
-      } else if (input.fileData) {
-        fileBuffer = Buffer.from(input.fileData, "base64");
-      } else {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No file data provided" });
+let fileBuffer: Buffer;
+
+if (input.fileUrl) {
+  const r = await fetch(input.fileUrl, { redirect: "follow" });
+
+  const ct = r.headers.get("content-type") || "";
+  const cl = r.headers.get("content-length") || "";
+
+  console.log("[Fetch fileUrl] status:", r.status, "content-type:", ct, "content-length:", cl);
+
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `fileUrl fetch failed: ${r.status}. Body: ${text.slice(0, 200)}`,
+    });
+  }
+
+  const ab = await r.arrayBuffer();
+  fileBuffer = Buffer.from(ab);
+
+      // sanity-check: если слишком маленький файл — это почти точно HTML/ошибка
+      if (fileBuffer.length < 1024) {
+        const head = fileBuffer.toString("utf8", 0, Math.min(200, fileBuffer.length));
+        console.log("[Fetch fileUrl] too small buffer, head:", head);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Downloaded file too small (${fileBuffer.length} bytes). Probably not a real video.`,
+        });
       }
+    } else if (input.fileData) {
+      fileBuffer = Buffer.from(input.fileData, "base64");
+    } else {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "No file data provided" });
+    }
+
 
       if (fileBuffer.length > MAX_VIDEO_SIZE) {
         throw new TRPCError({
