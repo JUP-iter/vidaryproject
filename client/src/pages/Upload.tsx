@@ -2,10 +2,14 @@ import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader2, UploadCloud, CheckCircle, AlertCircle, ArrowLeft } from "lucide-react";
-import { toast } from "sonner";
-import { useLocation } from "wouter";
+import { Loader2, UploadCloud, CheckCircle, ArrowLeft } from "lucide-react";
 import EnhancedResultCard from "@/components/EnhancedResultCard";
+
+
+const toast = {
+  success: (msg: string) => alert(msg),
+  error: (msg: string) => alert(msg),
+};
 
 type FileType = "image" | "audio" | "video";
 type AudioType = "voice" | "music";
@@ -20,7 +24,6 @@ interface AnalysisResult {
 }
 
 export default function UploadPage() {
-  const [, navigate] = useLocation();
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileType, setFileType] = useState<FileType | null>(null);
@@ -28,22 +31,22 @@ export default function UploadPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const analyzeImageMutation = trpc.detection.analyzeImage.useMutation();
   const analyzeAudioMutation = trpc.detection.analyzeAudio.useMutation();
   const analyzeVideoMutation = trpc.detection.analyzeVideo.useMutation();
-  const getPresignedUrlMutation = trpc.storage.getPresignedUrl.useMutation();
+
+  // ✅ НОВОЕ: upload через backend
+  const uploadFileMutation = trpc.storage.uploadFile.useMutation();
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
+    if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
+    else if (e.type === "dragleave") setDragActive(false);
   };
 
   const validateFile = (file: File): { valid: boolean; type?: FileType; error?: string } => {
@@ -56,26 +59,17 @@ export default function UploadPage() {
     const videoSizeLimit = 100 * 1024 * 1024;
 
     if (imageTypes.includes(file.type)) {
-      if (file.size > imageSizeLimit) {
-        return { valid: false, error: "Image exceeds 10MB limit" };
-      }
+      if (file.size > imageSizeLimit) return { valid: false, error: "Image exceeds 10MB limit" };
       return { valid: true, type: "image" };
     }
-
     if (audioTypes.includes(file.type)) {
-      if (file.size > audioSizeLimit) {
-        return { valid: false, error: "Audio exceeds 50MB limit" };
-      }
+      if (file.size > audioSizeLimit) return { valid: false, error: "Audio exceeds 50MB limit" };
       return { valid: true, type: "audio" };
     }
-
     if (videoTypes.includes(file.type)) {
-      if (file.size > videoSizeLimit) {
-        return { valid: false, error: "Video exceeds 100MB limit" };
-      }
+      if (file.size > videoSizeLimit) return { valid: false, error: "Video exceeds 100MB limit" };
       return { valid: true, type: "video" };
     }
-
     return { valid: false, error: "Unsupported file type" };
   };
 
@@ -83,11 +77,8 @@ export default function UploadPage() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-
     const files = e.dataTransfer.files;
-    if (files && files[0]) {
-      handleFileSelect(files[0]);
-    }
+    if (files && files[0]) handleFileSelect(files[0]);
   };
 
   const handleFileSelect = (file: File) => {
@@ -96,18 +87,22 @@ export default function UploadPage() {
       toast.error(validation.error || "Invalid file");
       return;
     }
-
     setSelectedFile(file);
-    if (validation.type) {
-      setFileType(validation.type);
-    }
+    if (validation.type) setFileType(validation.type);
     setResult(null);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFileSelect(e.target.files[0]);
-    }
+    if (e.target.files && e.target.files[0]) handleFileSelect(e.target.files[0]);
+  };
+
+  const readFileAsBase64 = (file: File) => {
+    const reader = new FileReader();
+    return new Promise<string>((resolve, reject) => {
+      reader.onload = () => resolve((reader.result as string).split(",")[1]); // only base64 part
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   };
 
   const handleAnalyze = async () => {
@@ -118,65 +113,56 @@ export default function UploadPage() {
 
     setIsAnalyzing(true);
     setAnalysisProgress(10);
-    
-    // Simulate progress updates
+
     progressIntervalRef.current = setInterval(() => {
       setAnalysisProgress((prev) => Math.min(prev + Math.random() * 30, 90));
     }, 500);
-    
+
     try {
       setAnalysisProgress(20);
-      let analysisResult;
 
-    if (fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024)) {
-      setAnalysisProgress(30);
+      let analysisResult: AnalysisResult | undefined;
 
-    const presign = await getPresignedUrlMutation.mutateAsync({
-      fileName: selectedFile.name,
-      fileType: selectedFile.type,
-    });
+      // ✅ Большие файлы (video + audio > 4MB) — грузим через backend, потом анализ по URL
+      const isLargeRemote =
+        fileType === "video" || (fileType === "audio" && selectedFile.size > 4 * 1024 * 1024);
 
-    if (!presign?.fields || !presign?.url || !presign?.fileUrl) {
-      console.log("presign:", presign);
-      throw new Error("Need { url, fields, fileUrl } from server");
-    }
+      if (isLargeRemote) {
+        setAnalysisProgress(35);
 
-    const form = new FormData();
-    Object.entries(presign.fields).forEach(([k, v]) => form.append(k, v));
-    form.append("file", selectedFile);
+        const fileData = await readFileAsBase64(selectedFile); // ⚠️ может быть тяжело для 100MB
+        setAnalysisProgress(55);
 
-    const resp = await fetch(presign.url, { method: "POST", body: form });
-    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
-
-    const fileUrl = presign.fileUrl;
-
-      setAnalysisProgress(60);
-
-      if (fileType === "video") {
-        analysisResult = await analyzeVideoMutation.mutateAsync({
+        const uploaded = await uploadFileMutation.mutateAsync({
           fileName: selectedFile.name,
-          fileUrl,
           mimeType: selectedFile.type,
+          fileData,
         });
+
+        if (!uploaded?.fileUrl) {
+          throw new Error("Upload failed: server returned no fileUrl");
+        }
+
+        setAnalysisProgress(70);
+
+        if (fileType === "video") {
+          analysisResult = await analyzeVideoMutation.mutateAsync({
+            fileName: selectedFile.name,
+            fileUrl: uploaded.fileUrl,
+            mimeType: selectedFile.type,
+          });
+        } else {
+          analysisResult = await analyzeAudioMutation.mutateAsync({
+            fileName: selectedFile.name,
+            fileUrl: uploaded.fileUrl,
+            mimeType: selectedFile.type,
+            audioType,
+          });
+        }
       } else {
-        analysisResult = await analyzeAudioMutation.mutateAsync({
-          fileName: selectedFile.name,
-          fileUrl,
-          mimeType: selectedFile.type,
-          audioType,
-        });
-      }
-    } else {
-        // For small files, use base64 (existing logic)
-        const reader = new FileReader();
-        const fileDataPromise = new Promise<string>((resolve, reject) => {
-          reader.onload = (e) => resolve((e.target?.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(selectedFile);
-        });
-
-        const fileData = await fileDataPromise;
-        setAnalysisProgress(40);
+        // ✅ Маленькие файлы — оставляем старую схему base64 -> analyze
+        const fileData = await readFileAsBase64(selectedFile);
+        setAnalysisProgress(45);
 
         if (fileType === "image") {
           analysisResult = await analyzeImageMutation.mutateAsync({
@@ -199,23 +185,13 @@ export default function UploadPage() {
         setResult(analysisResult);
         toast.success("Analysis complete!");
       } else {
-        console.error("Analysis failed: No result returned from server");
         toast.error("Server returned no result. Check logs.");
       }
     } catch (error: any) {
       console.error("Analysis error details:", error);
-      const errorMessage = error?.message || "Unknown error";
-      const errorCode = error?.data?.code || "No code";
-      
-      if (errorCode === "FORBIDDEN" && errorMessage.includes("not available")) {
-        toast.error(errorMessage);
-      } else {
-        toast.error(`Error: ${errorMessage} (${errorCode})`);
-      }
+      toast.error(error?.message || "Unknown error");
     } finally {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-      }
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
       setIsAnalyzing(false);
       setTimeout(() => setAnalysisProgress(0), 500);
     }
@@ -227,20 +203,19 @@ export default function UploadPage() {
     setResult(null);
     setAnalysisProgress(0);
     setAudioType("voice");
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   if (result) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 py-12 px-4">
         <div className="max-w-4xl mx-auto">
-          <EnhancedResultCard result={result} fileType={fileType || "image"} fileName={selectedFile?.name} />
-          <Button
-            onClick={handleReset}
-            className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white"
-          >
+          <EnhancedResultCard
+            result={result}
+            fileType={fileType || "image"}
+            fileName={selectedFile?.name}
+          />
+          <Button onClick={handleReset} className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white">
             Analyze Another File
           </Button>
         </div>
@@ -253,7 +228,7 @@ export default function UploadPage() {
       {/* Back Button */}
       <div className="max-w-4xl mx-auto mb-6">
         <Button
-          onClick={() => navigate("/")}
+          onClick={() => (window.location.href = "/")}
           variant="outline"
           className="flex items-center gap-2 border-slate-300 text-slate-700 hover:bg-slate-100"
         >
@@ -261,13 +236,12 @@ export default function UploadPage() {
           Back
         </Button>
       </div>
+
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-slate-900 mb-2">AI Content Detector</h1>
-          <p className="text-slate-600">
-            Upload an image, audio, or video file to detect if it's AI-generated
-          </p>
+          <p className="text-slate-600">Upload an image, audio, or video file to detect if it's AI-generated</p>
         </div>
 
         {/* Upload Card */}
@@ -277,8 +251,8 @@ export default function UploadPage() {
               dragActive
                 ? "border-blue-500 bg-blue-50"
                 : selectedFile
-                  ? "border-green-500 bg-green-50"
-                  : "border-slate-300 bg-white hover:border-slate-400"
+                ? "border-green-500 bg-green-50"
+                : "border-slate-300 bg-white hover:border-slate-400"
             }`}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
@@ -305,9 +279,7 @@ export default function UploadPage() {
               ) : (
                 <>
                   <UploadCloud className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-                  <p className="text-lg font-semibold text-slate-900 mb-2">
-                    Drop your file here or click to browse
-                  </p>
+                  <p className="text-lg font-semibold text-slate-900 mb-2">Drop your file here or click to browse</p>
                   <p className="text-sm text-slate-600">
                     Supports: JPG, PNG, WebP (10MB) • MP3, WAV, M4A (50MB) • MP4, MOV, WebM (100MB)
                   </p>
@@ -329,9 +301,7 @@ export default function UploadPage() {
         {/* Audio Type Selection */}
         {fileType === "audio" && (
           <Card className="border border-slate-200 shadow-md p-6 mb-6">
-            <label className="block text-sm font-semibold text-slate-900 mb-3">
-              Audio Type
-            </label>
+            <label className="block text-sm font-semibold text-slate-900 mb-3">Audio Type</label>
             <div className="flex gap-4">
               <label className="flex items-center cursor-pointer">
                 <input
@@ -392,33 +362,6 @@ export default function UploadPage() {
             )}
           </Button>
         )}
-
-        {/* Info Section */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card className="border border-slate-200 p-6 bg-white">
-            <div className="text-3xl mb-2">🖼️</div>
-            <h3 className="font-semibold text-slate-900 mb-2">Images</h3>
-            <p className="text-sm text-slate-600">
-              Detect AI-generated images from DALL-E, Midjourney, Stable Diffusion, and more
-            </p>
-          </Card>
-
-          <Card className="border border-slate-200 p-6 bg-white">
-            <div className="text-3xl font-bold text-purple-600 mb-2">🎵</div>
-            <h3 className="font-semibold text-slate-900 mb-2">Audio</h3>
-            <p className="text-sm text-slate-600">
-              Identify synthetic voices, cloned audio, and AI-generated music
-            </p>
-          </Card>
-
-          <Card className="border border-slate-200 p-6 bg-white">
-            <div className="text-3xl font-bold text-red-600 mb-2">🎬</div>
-            <h3 className="font-semibold text-slate-900 mb-2">Video</h3>
-            <p className="text-sm text-slate-600">
-              Detect deepfakes and AI-generated video content in real-time
-            </p>
-          </Card>
-        </div>
       </div>
     </div>
   );

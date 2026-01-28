@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc.js";
 import { detectionRouter } from "./detection.router.js";
-import { getUploadUrl } from "./storage.js";
+import { getUploadUrl, storagePut } from "./storage.js"; // ✅ добавили storagePut
 import { getUserByUsername, createUser } from "./db.js";
 import { sdk } from "./_core/sdk.js";
 import { TRPCError } from "@trpc/server";
@@ -49,12 +49,32 @@ export const appRouter = router({
 
   // Sub-routers
   detection: detectionRouter,
+
   storage: router({
+    // ✅ оставляем как есть (может пригодиться позже)
     getPresignedUrl: protectedProcedure
       .input(z.object({ fileName: z.string(), fileType: z.string() }))
       .mutation(async ({ input, ctx }) => {
         const key = `uploads/${ctx.user.id}/${Date.now()}-${input.fileName}`;
         return await getUploadUrl(key);
+      }),
+
+    // ✅ НОВОЕ: upload через backend (без CORS / без direct browser -> B2)
+    uploadFile: protectedProcedure
+      .input(
+        z.object({
+          fileName: z.string().min(1),
+          mimeType: z.string().min(1),
+          fileData: z.string().min(1), // base64 (без data:image/... префикса)
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const key = `uploads/${ctx.user.id}/${Date.now()}-${input.fileName}`;
+        const buffer = Buffer.from(input.fileData, "base64");
+
+        const { url } = await storagePut(key, buffer, input.mimeType);
+
+        return { fileUrl: url, key };
       }),
   }),
 });

@@ -28,7 +28,7 @@ function buildAuthHeaders(apiKey: string): HeadersInit {
 let s3Client: S3Client | null = null;
 function getS3Client() {
   if (s3Client) return s3Client;
-  
+
   const accessKeyId = ENV.s3.accessKeyId?.trim();
   const secretAccessKey = ENV.s3.secretAccessKey?.trim();
   let endpoint = ENV.s3.endpoint?.trim();
@@ -37,20 +37,21 @@ function getS3Client() {
     console.warn("[S3] Missing credentials");
     return null;
   }
-  
+
   // Ensure endpoint has protocol
   if (endpoint && !endpoint.startsWith('http')) {
     endpoint = `https://${endpoint}`;
   }
-  
+
   console.log(`[S3] Initializing client with endpoint: ${endpoint || 'AWS Default'}`);
 
   s3Client = new S3Client({
     region: ENV.s3.region?.trim() || "us-east-1",
     credentials: { accessKeyId, secretAccessKey },
     endpoint: endpoint || undefined,
-    forcePathStyle: true, // Required for Backblaze B2
+    forcePathStyle: false, // for B2 you may need true sometimes depending on endpoint style
   });
+
   return s3Client;
 }
 
@@ -68,8 +69,12 @@ export async function storagePut(
   if (baseUrl && apiKey) {
     const uploadUrl = new URL("v1/storage/upload", ensureTrailingSlash(baseUrl));
     uploadUrl.searchParams.set("path", key);
-    
-    const blob = typeof data === "string" ? new Blob([data], { type: contentType }) : new Blob([data as any], { type: contentType });
+
+    const blob =
+      typeof data === "string"
+        ? new Blob([data], { type: contentType })
+        : new Blob([data as any], { type: contentType });
+
     const form = new FormData();
     form.append("file", blob, key.split("/").pop() ?? key);
 
@@ -94,13 +99,14 @@ export async function storagePut(
       Body: data as any,
       ContentType: contentType,
     });
+
     await (client as any).send(command);
-    
-    // Construct URL (this assumes public access or specific endpoint)
-    const url = ENV.s3.endpoint 
+
+    // Construct URL (assumes public access or correct endpoint)
+    const url = ENV.s3.endpoint
       ? `${ENV.s3.endpoint.replace(/\/+$/, "")}/${ENV.s3.bucket}/${key}`
       : `https://${ENV.s3.bucket}.s3.${ENV.s3.region || "us-east-1"}.amazonaws.com/${key}`;
-    
+
     return { key, url };
   }
 
@@ -171,12 +177,8 @@ export async function getUploadUrl(
       Bucket: ENV.s3.bucket,
       Key: key,
       Expires: 3600,
-      Conditions: [
-        ["content-length-range", 1, maxSize],
-      ],
-      Fields: {
-        key, // важно
-      },
+      Conditions: [["content-length-range", 1, maxSize]],
+      Fields: { key },
     });
 
     const base = ENV.s3.endpoint.replace(/\/+$/, "");
@@ -185,5 +187,5 @@ export async function getUploadUrl(
     return { key, url, fields, fileUrl };
   }
 
-  throw new Error("Storage configuration missing: set forge key or S3 credentials");
+  throw new Error("Storage configuration missing: set forge key or S3  credentials");
 }
