@@ -26,6 +26,7 @@ async function uploadLargeFileToApi(file: File): Promise<{ fileUrl: string }> {
   const resp = await fetch("/api/upload", {
     method: "POST",
     body: form,
+    credentials: "include",
   });
 
   if (!resp.ok) {
@@ -34,9 +35,7 @@ async function uploadLargeFileToApi(file: File): Promise<{ fileUrl: string }> {
   }
 
   const json = await resp.json();
-  if (!json?.fileUrl) {
-    throw new Error("Upload API returned no fileUrl");
-  }
+  if (!json?.fileUrl) throw new Error("Upload API returned no fileUrl");
   return { fileUrl: json.fileUrl };
 }
 
@@ -50,7 +49,8 @@ export default function UploadPage() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
 
   const analyzeImageMutation = trpc.detection.analyzeImage.useMutation();
   const analyzeAudioMutation = trpc.detection.analyzeAudio.useMutation();
